@@ -26,23 +26,20 @@ export function isAuthSupported(): boolean {
   return false;
 }
 
-export function prepareParams(modules: ModulesInject, incomingParams: AuditArguments): Object {
+export function prepareParams(modules: ModulesInject, incomingParams: AuditArguments, outgoingParams: Object): Object {
   const { channel, channelGroup, authKeys = [] } = incomingParams;
-  const params = {};
 
   if (channel) {
-    params.channel = channel;
+    outgoingParams.channel = channel;
   }
 
   if (channelGroup) {
-    params['channel-group'] = channelGroup;
+    outgoingParams['channel-group'] = channelGroup;
   }
 
   if (authKeys.length > 0) {
-    params.auth = authKeys.join(',');
+    outgoingParams.auth = authKeys.join(',');
   }
-
-  return params;
 }
 
 export function handleResponse(modules: ModulesInject, serverResponse: Object): Object {

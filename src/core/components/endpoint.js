@@ -43,10 +43,58 @@ function generatePNSDK(config: Config): string {
   return base;
 }
 
+function createBaseParams(modules, endpoint) {
+  let { config } = modules;
+  const params = {};
+
+  params.uuid = config.UUID;
+  params.pnsdk = generatePNSDK(config);
+
+  if (config.useInstanceId) {
+    params.instanceid = config.instanceId;
+  }
+
+  if (config.useRequestId) {
+    params.requestid = uuidGenerator.v4();
+  }
+
+  if (endpoint.isAuthSupported() && config.getAuthKey()) {
+    params.auth = config.getAuthKey();
+  }
+
+  return params;
+}
+
+function signRequest(modules, endpoint, url, outgoingParams) {
+  let { config, crypto } = modules;
+
+  outgoingParams.timestamp = Math.floor(new Date().getTime() / 1000);
+  let signInput = config.subscribeKey + '\n' + config.publishKey + '\n';
+
+  if (endpoint.getOperation() === operationConstants.PNAccessManagerGrant) {
+    signInput += 'grant\n';
+  } else if (endpoint.getOperation() === operationConstants.PNAccessManagerAudit) {
+    signInput += 'audit\n';
+  } else {
+    signInput += url + '\n';
+  }
+
+  signInput += utils.signPamFromParams(outgoingParams);
+
+  let signature = crypto.HMACSHA256(signInput);
+  signature = signature.replace(/\+/g, '-');
+  signature = signature.replace(/\//g, '_');
+
+  outgoingParams.signature = signature;
+}
+
 export default function (modules, endpoint, ...args) {
-  let { networking, config, crypto } = modules;
+  let { networking, config } = modules;
   let callback = null;
+  let promiseComponent = null;
   let incomingParams = {};
+  let callInstance;
+
 
   if (endpoint.getOperation() === operationConstants.PNTimeOperation || endpoint.getOperation() === operationConstants.PNChannelGroupsOperation) {
     callback = args[0];
@@ -55,6 +103,17 @@ export default function (modules, endpoint, ...args) {
     callback = args[1];
   }
 
+  // bridge in Promise support.
+  if (typeof Promise !== 'undefined') {
+    promiseComponent = utils.createPromise();
+  }
+
+  let url = decideURL(endpoint, modules, incomingParams);
+  let networkingParams = { url,
+    operation: endpoint.getOperation(),
+    timeout: endpoint.getRequestTimeout(modules)
+  };
+
   let validationResult = endpoint.validateParams(modules, incomingParams);
 
   if (validationResult) {
@@ -62,55 +121,13 @@ export default function (modules, endpoint, ...args) {
     return;
   }
 
-  let outgoingParams = endpoint.prepareParams(modules, incomingParams);
-  let url = decideURL(endpoint, modules, incomingParams);
-  let callInstance;
-  let networkingParams = { url,
-    operation: endpoint.getOperation(),
-    timeout: endpoint.getRequestTimeout(modules)
-  };
+  let outgoingParams = createBaseParams(modules, endpoint);
 
-  outgoingParams.uuid = config.UUID;
-  outgoingParams.pnsdk = generatePNSDK(config);
-
-  if (config.useInstanceId) {
-    outgoingParams.instanceid = config.instanceId;
-  }
-
-  if (config.useRequestId) {
-    outgoingParams.requestid = uuidGenerator.v4();
-  }
-
-  if (endpoint.isAuthSupported() && config.getAuthKey()) {
-    outgoingParams.auth = config.getAuthKey();
-  }
+  // let the endpoint fill out its own params.
+  endpoint.prepareParams(modules, incomingParams, outgoingParams);
 
   if (config.secretKey) {
-    outgoingParams.timestamp = Math.floor(new Date().getTime() / 1000);
-    let signInput = config.subscribeKey + '\n' + config.publishKey + '\n';
-
-    if (endpoint.getOperation() === operationConstants.PNAccessManagerGrant) {
-      signInput += 'grant\n';
-    } else if (endpoint.getOperation() === operationConstants.PNAccessManagerAudit) {
-      signInput += 'audit\n';
-    } else {
-      signInput += url + '\n';
-    }
-
-    signInput += utils.signPamFromParams(outgoingParams);
-
-    let signature = crypto.HMACSHA256(signInput);
-    signature = signature.replace(/\+/g, '-');
-    signature = signature.replace(/\//g, '_');
-
-    outgoingParams.signature = signature;
-  }
-
-  let promiseComponent = null;
-
-  // bridge in Promise support.
-  if (typeof Promise !== 'undefined' && !callback) {
-    promiseComponent = utils.createPromise();
+    signRequest(modules, endpoint, url, outgoingParams);
   }
 
   let onResponse = (status: StatusAnnouncement, payload: Object) => {
